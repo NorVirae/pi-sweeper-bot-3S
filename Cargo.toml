@@ -1,0 +1,15 @@
+[package]
+name = "pie_main_bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bip39 = "1.0"
+hmac = "0.12"
+sha2 = "0.10"
+stellar_sdk = "0.1.4"
+pi_network = { path = "./pi_network" }
+tokio = { version = "1", features = ["full"] }
+lazy_static = "1.5.0"
+thiserror = "2.0.12"
+stellar-base = "0.5.0"

@@ -1,0 +1,38 @@
+[package]
+name = "pi_network"
+version = "0.1.0"
+edition = "2021"
+description = "Rust client for Pi Network integration"
+authors = ["Your Name <your.email@example.com>"]
+
+[dependencies]
+# HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+
+
+# Stellar SDK - use a specific version that matches your requirements
+stellar_sdk = "0.1.4"
+stellar-base = "0.5.0"
+
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Utilities
+regex = "1.5"
+thiserror = "1.0"
+anyhow = "1.0"  # Added missing dependency
+
+[lib]
+name = "pi_network"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pi_network_example"
+path = "src/main.rs"
+required-features = []
