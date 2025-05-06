@@ -1109,6 +1109,7 @@ dependencies = [
  "hmac",
  "lazy_static",
  "pi_network",
+ "serde_json",
  "sha2",
  "stellar-base",
  "stellar_sdk",
