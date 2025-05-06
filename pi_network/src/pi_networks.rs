@@ -133,22 +133,30 @@ impl PiNetwork {
 
         self.open_payments = HashMap::new();
         self.network = network.to_string();
-
+        
         // Fetch base fee from the network
         self.fee = self.fetch_base_fee().await?;
+        println!("SOMEThING H ERE");
 
         Ok(true)
     }
 
+    // Fixed PiNetwork implementation
+
     pub async fn send_transaction(&mut self) -> Result<Value, Box<dyn std::error::Error>> {
         // --- User inputs / configuration ---
-        let recipient_public_key = "GCSJQHRIJKGV5MUDK5IVZOFPLHH3C34BMVBIJVZ5SOUGGLU5YYT2WMJI";
+        let recipient_public_key = "GCR5CBW2Q3FD6V72UKPXEXTG6TZVBOQVBGVPXICBTVBLCBV3YY5YDZUC";
 
         // Parse the recipient public key
         let recipient_pk = PublicKey::from_account_id(recipient_public_key)?;
 
         // --- Retrieve sender's account sequence from Horizon ---
-        let horizon_url = self.base_url.to_string();
+        let horizon_url = if self.network == "Pi Mainnet" {
+            "https://api.mainnet.minepi.com".to_string()
+        } else {
+            "https://api.testnet.minepi.com".to_string()
+        };
+
         let client = reqwest::Client::new();
 
         // Step 1: Fetch the current fee stats to get a reasonable fee
@@ -160,7 +168,7 @@ impl PiNetwork {
 
         let fee_json: Value = fee_resp.json().await?;
         // Get the max fee from the p90 accepted fee for better chances of acceptance
-        let fee_str = fee_json["last_ledger_base_fee"].as_str().unwrap_or("200"); // Default higher than MIN_BASE_FEE if we can't get it
+        let fee_str = fee_json["last_ledger_base_fee"].as_str().unwrap_or("98"); // Default higher than MIN_BASE_FEE if we can't get it
 
         let base_fee: u32 = fee_str.parse().unwrap_or(200);
         // Use at least double the last ledger base fee to have a better chance of acceptance
@@ -177,50 +185,44 @@ impl PiNetwork {
             horizon_url,
             self.keypair.as_ref().unwrap().public_key()
         );
+
         let resp = client.get(&account_url).send().await?;
         if !resp.status().is_success() {
             return Err(format!("Failed to fetch account from Horizon: {}", resp.status()).into());
         }
+
         let account_json: Value = resp.json().await?;
         let sequence_str = account_json["sequence"]
             .as_str()
             .ok_or("No sequence in response")?;
 
         println!("Current sequence number: {}", sequence_str);
-        let sender_sequence: i64 = sequence_str.parse()?;
-
-        // IMPORTANT: For Stellar transactions, we need to use current sequence + 1
-        let tx_sequence = sender_sequence + 1;
-        println!("Using transaction sequence: {}", tx_sequence);
+        let sequence_value: i64 = sequence_str.parse()?;
 
         // --- Build the payment operation and transaction ---
-        let amount = stellar_base::amount::Amount::from_str("10")?;
+        let amount = stellar_base::amount::Amount::from_str("900")?;
         let payment_op = Operation::new_payment()
             .with_destination(recipient_pk)
             .with_amount(amount)?
             .with_asset(Asset::new_native())
             .build()?;
 
-        // Sign the transaction with the sender's key and the correct network passphrase
-        let network = Network::new(self.network.to_string()).to_owned();
-        //     Network::new(self.network.to_string());
-        // } else {
-        //     Network::new(self.network.to_string());
+        // CRITICAL FIX: Use the exact same network passphrase as in your sweeper code
+        let network_passphrase = self.network.as_str();
+        println!("Using network passphrase: {}", network_passphrase);
+        let network = Network::new(network_passphrase.to_string());
 
-        // };
-
-        println!("NETWORK : {}", network.passphrase());
-
-        // Build the transaction with our higher fee, sequence + 1, and operation
+        // Build the transaction with our higher fee and operations
         let mut tx = Trans::builder::<PublicKey>(
             self.keypair.as_ref().unwrap().public_key().clone(),
-            tx_sequence,     // Use incremented sequence
-            transaction_fee, // Pass a reference to the Stroops struct
+            sequence_value, // Use sequence exactly as returned from the server
+            transaction_fee,
         )
         .with_memo(Memo::new_text("Testnet XLM transfer")?)
         .add_operation(payment_op)
         .into_transaction()?;
 
+        // Sign the transaction with the network passphrase
         let result = tx.sign(&self.keypair.as_ref().unwrap(), &network);
         println!("Transaction signing result: {:?}", result);
 
@@ -237,12 +239,45 @@ impl PiNetwork {
             .await?;
 
         if submit_resp.status().is_success() {
+            // NEW: Correctly extract the transaction hash
             let submit_json: Value = submit_resp.json().await?;
-            println!("Transaction successful! Hash: {}", submit_json["hash"]);
-            Ok(submit_json)
+
+            println!("Raw transaction response: {:?}", submit_json);
+
+            // Check if the hash exists in the response
+            if let Some(hash) = submit_json.get("hash") {
+                if hash.is_null() {
+                    println!("Warning: Transaction successful but hash is null");
+                    return Ok(serde_json::json!("transaction_submitted_but_hash_null"));
+                } else {
+                    let hash_str = hash.as_str().unwrap_or("unknown");
+                    println!("Transaction successful! Hash: {}", hash_str);
+                    return Ok(serde_json::json!(hash_str));
+                }
+            } else {
+                // If we can't find the hash, return the whole response for debugging
+                println!("Transaction successful but no hash field found in response");
+                return Ok(submit_json);
+            }
         } else {
+            // NEW: Capture and inspect the error properly
+            let err_status = submit_resp.status();
             let err_text = submit_resp.text().await?;
-            println!("Transaction submission failed: {}", err_text);
+            println!(
+                "Transaction submission failed with status {}: {}",
+                err_status, err_text
+            );
+
+            // Try to parse the error response as JSON for better error reporting
+            let err_json: Result<Value, _> = serde_json::from_str(&err_text);
+            if let Ok(json) = err_json {
+                if let Some(extras) = json.get("extras") {
+                    if let Some(result_codes) = extras.get("result_codes") {
+                        println!("Error result codes: {:?}", result_codes);
+                    }
+                }
+            }
+
             Err(format!("Transaction submission failed: {}", err_text).into())
         }
     }
