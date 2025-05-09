@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn StdError + Send + Sync>> {
 
         handles.push(handle);
         println!("Attempt {}", attempt_id);
-        time::sleep(time::Duration::from_millis(100)).await;
+        time::sleep(time::Duration::from_millis(3)).await;
     }
 
     for handle in handles {
