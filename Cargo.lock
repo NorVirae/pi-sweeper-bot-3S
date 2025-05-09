@@ -1091,10 +1091,14 @@ name = "pi_network"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bip39",
+ "hmac",
+ "lazy_static",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "stellar-base",
  "stellar_sdk",
  "thiserror 1.0.69",

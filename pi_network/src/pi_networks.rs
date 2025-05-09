@@ -6,15 +6,29 @@
 #![allow(dead_code)] // Temporarily allows unused code during development
 
 use anyhow;
+use bip39::{Language, Mnemonic};
+use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest::{Client, Error as ReqwestError};
+use std::error::Error as StdError;
+use stellar_sdk::Keypair;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use stellar_sdk::{types::Account, Server};
+use tokio::sync::{mpsc, Mutex};
+
+use hmac::{Hmac, Mac};
+use sha2::Sha512;
 
 use serde_json::Value;
 use std::str::FromStr;
+
+
+type HmacSha512 = Hmac<Sha512>;
 use stellar_base::asset::Asset;
 use stellar_base::crypto::PublicKey;
 use stellar_base::memo::Memo;
@@ -90,11 +104,15 @@ pub struct PiNetwork {
     server: Option<Server>,
     keypair: Option<stellar_base::crypto::KeyPair>, // Use the correct type
     fee: String,
+    derived_keypair: Keypair,
 }
+
+
+
 
 impl PiNetwork {
     /// Creates a new PiNetwork instance
-    pub fn new() -> Self {
+    pub fn new(mnemonic_phrase: &str) -> Self {
         Self {
             api_key: String::new(),
             client: Client::new(),
@@ -106,6 +124,7 @@ impl PiNetwork {
             server: None, // We'll initialize this properly in load_account
             keypair: None,
             fee: String::from("100"), // Default fee
+            derived_keypair: get_pi_network_keypair(mnemonic_phrase).unwrap().clone(),
         }
     }
 
@@ -113,16 +132,18 @@ impl PiNetwork {
     pub async fn initialize(
         &mut self,
         api_key: &str,
-        wallet_private_key: &str,
         network: &str,
     ) -> Result<bool, PiNetworkError> {
-        if !self.validate_private_seed_format(wallet_private_key) {
+        
+        
+        
+        self.api_key = api_key.to_string();
+        let secret_key = self.derived_keypair.secret_key().unwrap().to_string();
+        if !self.validate_private_seed_format(&secret_key) {
             println!("No valid private seed!");
             return Ok(false);
         }
-
-        self.api_key = api_key.to_string();
-        self.load_account(wallet_private_key, network)?;
+        self.load_account(&secret_key, network)?;
 
         // Set base_url based on network
         self.base_url = if network == "Pi Network" {
@@ -133,7 +154,7 @@ impl PiNetwork {
 
         self.open_payments = HashMap::new();
         self.network = network.to_string();
-        
+
         // Fetch base fee from the network
         self.fee = self.fetch_base_fee().await?;
         println!("SOMEThING H ERE");
@@ -143,84 +164,70 @@ impl PiNetwork {
 
     // Fixed PiNetwork implementation
 
-    pub async fn send_transaction(&mut self) -> Result<Value, Box<dyn std::error::Error>> {
+    pub async fn send_transaction(
+        &mut self,
+        recp_public_key: String,
+        amount: String,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
         // --- User inputs / configuration ---
-        let recipient_public_key = "GCR5CBW2Q3FD6V72UKPXEXTG6TZVBOQVBGVPXICBTVBLCBV3YY5YDZUC";
-    
+        let recipient_public_key = recp_public_key.clone();
+        let recipient_public_key = recipient_public_key.trim();
+
         // Parse the recipient public key
         let recipient_pk = PublicKey::from_account_id(recipient_public_key)?;
-    
+
         // --- Retrieve sender's account sequence from Horizon ---
         let horizon_url = if self.network == "Pi Mainnet" {
             "https://api.mainnet.minepi.com".to_string()
         } else {
             "https://api.testnet.minepi.com".to_string()
         };
-    
+
         let client = reqwest::Client::new();
-    
-        // Step 1: Fetch the current fee stats to get a reasonable fee
-        let fee_stats_url = format!("{}/fee_stats", horizon_url);
-        let fee_resp = client.get(&fee_stats_url).send().await?;
-        if !fee_resp.status().is_success() {
-            return Err(format!("Failed to fetch fee stats: {}", fee_resp.status()).into());
-        }
-    
-        let fee_json: Value = fee_resp.json().await?;
-        // Get the max fee from the p90 accepted fee for better chances of acceptance
-        let fee_str = fee_json["last_ledger_base_fee"].as_str().unwrap_or("100"); // Default higher than MIN_BASE_FEE if we can't get it
-    
-        let base_fee: u32 = fee_str.parse().unwrap_or(200);
-        // Use at least double the last ledger base fee to have a better chance of acceptance
-        let fee_value = std::cmp::max(base_fee * 2, 1000); // Use at least 1000 stroops (0.0001 XLM)
-    
-        // Convert to Stroops type that the SDK expects
-        let transaction_fee = stellar_base::amount::Stroops::new(fee_value as i64);
-    
-        println!("Using transaction fee: {} stroops", fee_value);
-    
         // Step 2: Get the FRESH account information and sequence number
         let account_url = format!(
             "{}/accounts/{}",
             horizon_url,
             self.keypair.as_ref().unwrap().public_key()
         );
-    
+
         let resp = client.get(&account_url).send().await?;
         if !resp.status().is_success() {
             return Err(format!("Failed to fetch account from Horizon: {}", resp.status()).into());
         }
-    
+
         let account_json: Value = resp.json().await?;
         let sequence_str = account_json["sequence"]
             .as_str()
             .ok_or("No sequence in response")?;
-    
+
         println!("Current sequence number: {}", sequence_str);
         let sequence_value: i64 = sequence_str.parse()?;
-        
+
         // IMPORTANT: Add 1 to the sequence number
         // The Stellar network expects the next transaction to use sequence+1
         let next_sequence = sequence_value + 1;
         println!("Using next sequence number: {}", next_sequence);
-    
+
         // --- Build the payment operation and transaction ---
-        let amount = stellar_base::amount::Amount::from_str("90")?;
+        let amount = stellar_base::amount::Amount::from_str(&amount)?;
         let payment_op = Operation::new_payment()
             .with_destination(recipient_pk)
             .with_amount(amount)?
             .with_asset(Asset::new_native())
             .build()?;
-    
+
         // Determine the correct network passphrase based on network
-        let network_passphrase = if self.network == "Pi Mainnet" {
-            "Pi Mainnet"
-        } else {
-            "Pi Testnet"
-        };
-        println!("Using network passphrase: {}", network_passphrase);
-        let network = Network::new(network_passphrase.to_string());
-    
+        println!("Using network passphrase: {}", self.network);
+        let network = Network::new(self.network.to_string());
+
+        let base_fee: u32 = self.fee.parse()?;
+        // Use at least double the last ledger base fee to have a better chance of acceptance
+        let fee_value = std::cmp::max(base_fee * 2, 1000); // Use at least 1000 stroops (0.0001 XLM)
+
+        // Convert to Stroops type that the SDK expects
+        let transaction_fee = stellar_base::amount::Stroops::new(fee_value as i64);
+
         // Build the transaction with our higher fee and operations
         let mut tx = Trans::builder::<PublicKey>(
             self.keypair.as_ref().unwrap().public_key().clone(),
@@ -230,15 +237,15 @@ impl PiNetwork {
         .with_memo(Memo::new_text("Testnet XLM transfer")?)
         .add_operation(payment_op)
         .into_transaction()?;
-    
+
         // Sign the transaction with the network passphrase
         let result = tx.sign(&self.keypair.as_ref().unwrap(), &network);
         println!("Transaction signing result: {:?}", result);
-    
+
         // Convert the signed transaction to base64 XDR
         let envelope_xdr = tx.into_envelope().xdr_base64()?;
         println!("XDR: {}", envelope_xdr);
-    
+
         // --- Submit the transaction to Horizon ---
         let params = [("tx", envelope_xdr.clone())];
         let submit_resp = client
@@ -246,12 +253,12 @@ impl PiNetwork {
             .form(&params)
             .send()
             .await?;
-    
+
         if submit_resp.status().is_success() {
             let submit_json: Value = submit_resp.json().await?;
-    
+
             println!("Raw transaction response: {:?}", submit_json);
-    
+
             // Check if the hash exists in the response
             if let Some(hash) = submit_json.get("hash") {
                 if hash.is_null() {
@@ -274,7 +281,7 @@ impl PiNetwork {
                 "Transaction submission failed with status {}: {}",
                 err_status, err_text
             );
-    
+
             // Try to parse the error response as JSON for better error reporting
             let err_json: Result<Value, _> = serde_json::from_str(&err_text);
             if let Ok(json) = err_json {
@@ -285,7 +292,7 @@ impl PiNetwork {
                 }
                 return Err(format!("Transaction submission failed: {}", json).into());
             }
-    
+
             Err(format!("Transaction submission failed: {}", err_text).into())
         }
     }
@@ -478,10 +485,69 @@ impl PiNetwork {
         &self.from_address
     }
 }
+pub fn get_pi_network_keypair(
+    mnemonic_phrase: &str,
+) -> Result<Keypair, Box<dyn StdError + Send + Sync>> {
+    let mnemonic = Mnemonic::parse_in(Language::English, mnemonic_phrase)?;
+    let seed = mnemonic.to_seed("");
 
-// Implement Default trait for easier instantiation
-impl Default for PiNetwork {
-    fn default() -> Self {
-        Self::new()
-    }
+    let hmac_key = b"ed25519 seed";
+    let mut mac = HmacSha512::new_from_slice(hmac_key)?;
+    mac.update(&seed);
+    let i = mac.finalize().into_bytes();
+
+    let master_private_key = &i[0..32];
+    let master_chain_code = &i[32..64];
+
+    // Purpose level: m/44'
+    let purpose_index: u32 = 0x8000002C; // 44 + hardened bit
+    let mut data = vec![0u8];
+    data.extend_from_slice(master_private_key);
+    data.extend_from_slice(&purpose_index.to_be_bytes());
+
+    let mut mac = HmacSha512::new_from_slice(master_chain_code)?;
+    mac.update(&data);
+    let i = mac.finalize().into_bytes();
+
+    let purpose_private_key = &i[0..32];
+    let purpose_chain_code = &i[32..64];
+
+    // Coin type level: m/44'/314159'
+    let coin_type_index: u32 = 0x80000000 + 314159; // Pi Network coin type + hardened bit
+    let mut data = vec![0u8];
+    data.extend_from_slice(purpose_private_key);
+    data.extend_from_slice(&coin_type_index.to_be_bytes());
+
+    let mut mac = HmacSha512::new_from_slice(purpose_chain_code)?;
+    mac.update(&data);
+    let i = mac.finalize().into_bytes();
+
+    let coin_type_private_key = &i[0..32];
+    let coin_type_chain_code = &i[32..64];
+
+    // Account level: m/44'/314159'/0'
+    let account_index: u32 = 0x80000000; // 0 + hardened bit
+    let mut data = vec![0u8];
+    data.extend_from_slice(coin_type_private_key);
+    data.extend_from_slice(&account_index.to_be_bytes());
+
+    let mut mac = HmacSha512::new_from_slice(coin_type_chain_code)?;
+    mac.update(&data);
+    let i = mac.finalize().into_bytes();
+
+    let account_private_key = &i[0..32];
+
+    // Create Stellar keypair from the derived private key
+    let mut seed_array = [0u8; 32];
+    seed_array.copy_from_slice(account_private_key);
+
+    let keypair = Keypair::from_raw_ed25519_seed(&seed_array)?;
+
+    Ok(keypair)
 }
+// Implement Default trait for easier instantiation
+// impl Default for PiNetwork {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
