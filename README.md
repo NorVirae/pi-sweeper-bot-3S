@@ -1,6 +1,6 @@
-# 🦀 Rust Project
+# 🦀 PI Sweeper Bot 3S Project
 
-1. A Rust-based project. This README provides instructions for setting up, running, and working with the codebase.
+1. A Rust-based Pi Sweeper Bot project. This README provides instructions for setting up, running, and working with the codebase.
 
 ---
 
