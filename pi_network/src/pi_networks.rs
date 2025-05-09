@@ -105,6 +105,7 @@ pub struct PiNetwork {
     keypair: Option<stellar_base::crypto::KeyPair>, // Use the correct type
     fee: String,
     derived_keypair: Keypair,
+    sequence_value: i64, // Use i64 for sequence value
 }
 
 
@@ -125,6 +126,7 @@ impl PiNetwork {
             keypair: None,
             fee: String::from("100"), // Default fee
             derived_keypair: get_pi_network_keypair(mnemonic_phrase).unwrap().clone(),
+            sequence_value: 0, // Initialize sequence_value to 0
         }
     }
 
@@ -134,6 +136,7 @@ impl PiNetwork {
         api_key: &str,
         network: &str,
     ) -> Result<bool, PiNetworkError> {
+        
         
         
         
@@ -152,12 +155,37 @@ impl PiNetwork {
             "https://api.testnet.minepi.com".to_string()
         };
 
+        println!("BASE URL: {}", self.base_url);
+
         self.open_payments = HashMap::new();
         self.network = network.to_string();
 
         // Fetch base fee from the network
         self.fee = self.fetch_base_fee().await?;
         println!("SOMEThING H ERE");
+
+
+        let client = reqwest::Client::new();
+        // Step 2: Get the FRESH account information and sequence number
+        let account_url = format!(
+            "{}/accounts/{}",
+            &self.base_url,
+            self.keypair.as_ref().unwrap().public_key()
+        );
+
+        let resp = client.get(&account_url).send().await?;
+
+        let account_json: Value = resp.json().await?;
+        let sequence_str = account_json["sequence"]
+            .as_str()
+            .ok_or("No sequence in response");
+
+        println!("Current sequence number: {}", sequence_str.unwrap());
+        let sequence_value: i64 = sequence_str
+            .unwrap()
+            .parse()
+            .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
+        self.sequence_value = sequence_value.clone();
 
         Ok(true)
     }
@@ -177,36 +205,39 @@ impl PiNetwork {
         let recipient_pk = PublicKey::from_account_id(recipient_public_key)?;
 
         // --- Retrieve sender's account sequence from Horizon ---
-        let horizon_url = if self.network == "Pi Mainnet" {
+        let horizon_url = if self.network == "Pi Network" {
             "https://api.mainnet.minepi.com".to_string()
         } else {
             "https://api.testnet.minepi.com".to_string()
         };
 
         let client = reqwest::Client::new();
+        
+
+        // IMPORTANT: Add 1 to the sequence number
+
         // Step 2: Get the FRESH account information and sequence number
         let account_url = format!(
             "{}/accounts/{}",
-            horizon_url,
+            &self.base_url,
             self.keypair.as_ref().unwrap().public_key()
         );
 
         let resp = client.get(&account_url).send().await?;
-        if !resp.status().is_success() {
-            return Err(format!("Failed to fetch account from Horizon: {}", resp.status()).into());
-        }
 
         let account_json: Value = resp.json().await?;
+        println!("Account JSON: {:?}", &self.base_url);
         let sequence_str = account_json["sequence"]
             .as_str()
-            .ok_or("No sequence in response")?;
+            .ok_or("No sequence in response");
 
-        println!("Current sequence number: {}", sequence_str);
-        let sequence_value: i64 = sequence_str.parse()?;
-
-        // IMPORTANT: Add 1 to the sequence number
+        println!("Current sequence number: {}", sequence_str.unwrap());
+        let sequence_value: i64 = sequence_str
+            .unwrap()
+            .parse()
+            .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
         // The Stellar network expects the next transaction to use sequence+1
-        let next_sequence = sequence_value + 1;
+        let next_sequence = sequence_value.clone() + 1;
         println!("Using next sequence number: {}", next_sequence);
 
         // --- Build the payment operation and transaction ---
@@ -323,7 +354,7 @@ impl PiNetwork {
         self.from_address = public_key.clone();
 
         // Set the network and horizon server based on network parameter
-        let horizon = if network == "Pi Mainnet" {
+        let horizon = if network == "Pi Network" {
             "https://api.mainnet.minepi.com".to_string()
         } else {
             "https://api.testnet.minepi.com".to_string()
