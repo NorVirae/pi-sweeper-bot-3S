@@ -7,7 +7,6 @@
 
 use anyhow;
 use bip39::{Language, Mnemonic};
-use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest::{Client, Error as ReqwestError};
 use std::error::Error as StdError;
@@ -15,18 +14,13 @@ use stellar_sdk::Keypair;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net;
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use stellar_sdk::{types::Account, Server};
-use tokio::sync::{mpsc, Mutex};
 
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
 
 use serde_json::Value;
 use std::str::FromStr;
-
 
 type HmacSha512 = Hmac<Sha512>;
 use stellar_base::asset::Asset;
@@ -108,9 +102,6 @@ pub struct PiNetwork {
     sequence_value: i64, // Use i64 for sequence value
 }
 
-
-
-
 impl PiNetwork {
     /// Creates a new PiNetwork instance
     pub fn new(mnemonic_phrase: &str) -> Self {
@@ -136,10 +127,6 @@ impl PiNetwork {
         api_key: &str,
         network: &str,
     ) -> Result<bool, PiNetworkError> {
-        
-        
-        
-        
         self.api_key = api_key.to_string();
         let secret_key = self.derived_keypair.secret_key().unwrap().to_string();
         if !self.validate_private_seed_format(&secret_key) {
@@ -163,7 +150,6 @@ impl PiNetwork {
         // Fetch base fee from the network
         self.fee = self.fetch_base_fee().await?;
         println!("SOMEThING H ERE");
-
 
         let client = reqwest::Client::new();
         // Step 2: Get the FRESH account information and sequence number
@@ -212,32 +198,31 @@ impl PiNetwork {
         };
 
         let client = reqwest::Client::new();
-        
 
         // IMPORTANT: Add 1 to the sequence number
 
-        // Step 2: Get the FRESH account information and sequence number
-        let account_url = format!(
-            "{}/accounts/{}",
-            &self.base_url,
-            self.keypair.as_ref().unwrap().public_key()
-        );
+        // // Step 2: Get the FRESH account information and sequence number
+        // let account_url = format!(
+        //     "{}/accounts/{}",
+        //     &self.base_url,
+        //     self.keypair.as_ref().unwrap().public_key()
+        // );
 
-        let resp = client.get(&account_url).send().await?;
+        // let resp = client.get(&account_url).send().await?;
 
-        let account_json: Value = resp.json().await?;
-        println!("Account JSON: {:?}", &self.base_url);
-        let sequence_str = account_json["sequence"]
-            .as_str()
-            .ok_or("No sequence in response");
+        // let account_json: Value = resp.json().await?;
+        // println!("Account JSON: {:?}", &self.base_url);
+        // let sequence_str = account_json["sequence"]
+        //     .as_str()
+        //     .ok_or("No sequence in response");
 
-        println!("Current sequence number: {}", sequence_str.unwrap());
-        let sequence_value: i64 = sequence_str
-            .unwrap()
-            .parse()
-            .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
+        // println!("Current sequence number: {}", sequence_str.unwrap());
+        // let sequence_value: i64 = sequence_str
+        //     .unwrap()
+        //     .parse()
+        //     .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
         // The Stellar network expects the next transaction to use sequence+1
-        let next_sequence = sequence_value.clone() + 1;
+        let next_sequence = self.sequence_value + 1;
         println!("Using next sequence number: {}", next_sequence);
 
         // --- Build the payment operation and transaction ---
