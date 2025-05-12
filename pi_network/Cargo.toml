@@ -31,6 +31,7 @@ lazy_static = "1.5.0"
 bip39 = "1.0"
 hmac = "0.12"
 sha2 = "0.10"
+hex = "0.4"
 
 [lib]
 name = "pi_network"

@@ -7,7 +7,7 @@ use tokio::{self, time};
 use pi_network::PiNetwork;
 
 const API_KEY: &str = "b36ty496dx4sprsn7yavxatzm4bone3uj3uzvcazc2ltfidlnsmmfstmfzuxdsqk";
-const NETWORK_PASSPHRASE: &str = "Pi Testnet"; //Pi Testnet Pi Network
+const NETWORK_PASSPHRASE: &str = "Pi Network"; //Pi Testnet Pi Network
 // const TARGET_ADDRESS: &str = "GCR5CBW2Q3FD6V72UKPXEXTG6TZVBOQVBGVPXICBTVBLCBV3YY5YDZUC";
 
 // const MNEMONIC_PHRASE: &str = "wasp vehicle census boil funny clean bacon census destroy high tower chronic pool exotic chuckle derive melody pave carbon salon easy wink park call";

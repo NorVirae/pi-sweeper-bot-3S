@@ -5,7 +5,20 @@
 
 #![allow(dead_code)] // Temporarily allows unused code during development
 
-use anyhow;
+// use std::str::FromStr;
+use stellar_base::{
+    claim::ClaimableBalanceId,
+    operations::ClaimClaimableBalanceOperation,
+    xdr::{
+        ClaimClaimableBalanceOp,
+        // ClaimableBalanceId,
+        // Memo,
+        MuxedAccount,
+        //  Operation
+    }, // PublicKey,
+};
+
+use anyhow::{self, Context};
 use bip39::{Language, Mnemonic};
 use regex::Regex;
 use reqwest::{Client, Error as ReqwestError};
@@ -24,7 +37,11 @@ use std::str::FromStr;
 
 type HmacSha512 = Hmac<Sha512>;
 use stellar_base::asset::Asset;
-use stellar_base::crypto::PublicKey;
+use stellar_base::crypto::{
+    hash,
+    //  MuxedAccount,
+    PublicKey,
+};
 use stellar_base::memo::Memo;
 use stellar_base::network::Network;
 use stellar_base::operations::Operation;
@@ -222,9 +239,27 @@ impl PiNetwork {
         //     .parse()
         //     .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
         // The Stellar network expects the next transaction to use sequence+1
-        let next_sequence = self.sequence_value + 1;
-        self.sequence_value = next_sequence; // Update the sequence value for the next transaction
-        println!("Using next sequence number: {}", next_sequence);
+        // Step 2: Get the FRESH account information and sequence number
+        let account_url = format!(
+            "{}/accounts/{}",
+            &self.base_url,
+            self.keypair.as_ref().unwrap().public_key()
+        );
+
+        let resp = client.get(&account_url).send().await?;
+
+        let account_json: Value = resp.json().await?;
+        let sequence_str = account_json["sequence"]
+            .as_str()
+            .ok_or("No sequence in response");
+
+        println!("Current sequence number: {}", sequence_str.unwrap());
+        let sequence_value: i64 = sequence_str
+            .unwrap()
+            .parse()
+            .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
+        let sequence_value = sequence_value + 1; // Increment the sequence value for the next transaction
+        println!("Using next sequence number: {}", sequence_value);
 
         // --- Build the payment operation and transaction ---
         let amount = stellar_base::amount::Amount::from_str(&amount)?;
@@ -234,24 +269,48 @@ impl PiNetwork {
             .with_asset(Asset::new_native())
             .build()?;
 
+        // let balance_id_xdr =
+        //     "00000000750a37e604268cacfd28466b7e730828242e4a808fe93cbe92eb196b37a2f190"; // Example XDR string
+
+        // // The XDR is in hex format, not base64, so convert from hex to bytes
+        // let raw: Vec<u8> = hex::decode(balance_id_xdr)?;
+
+        // // Create a ClaimableBalanceId from the XDR bytes
+        // // Note: We're using the correct method and error handling
+        // let raw_bytes =
+        //     hex::decode(balance_id_hex).context("decoding hex for ClaimableBalanceId")?; // hex::decode returns Vec<u8> of length 32
+
+        // // Create the claim operation
+        // // Use the Operation builder pattern that matches your other code style
+        // let claim_operation = Operation::new_claim_claimable_balance()
+        //     .with_claimable_balance_id(balance_id)
+        //     .build()?;
+
         // Determine the correct network passphrase based on network
         println!("Using network passphrase: {}", self.network);
         let network = Network::new(self.network.to_string());
 
-        let base_fee: u32 = self.fee.parse()?;
-        // Use at least double the last ledger base fee to have a better chance of acceptance
-        let fee_value = std::cmp::max(base_fee * 2, 1000); // Use at least 1000 stroops (0.0001 XLM)
+        // let base_fee: u32 = self.fee.parse()?;
+        // // Use at least double the last ledger base fee to have a better chance of acceptance
+        // let fee_value = std::cmp::max(base_fee * 2, 1000); // Use at least 1000 stroops (0.0001 XLM)
+
+        let stats: &str = &self.fetch_base_fee().await?;
+        println!("Fee stats: {:?}", stats);
+        // 2. Determine my fee
+        let target: u32 = 300;
+        let per_op = target + 1; // outbid by 1 stroop
+        let op_count = 1; // e.g., one payment op
+        let transaction_fee = stellar_base::amount::Stroops::new((per_op * op_count) as i64);
 
         // Convert to Stroops type that the SDK expects
-        let transaction_fee = stellar_base::amount::Stroops::new(fee_value as i64);
-
         // Build the transaction with our higher fee and operations
         let mut tx = Trans::builder::<PublicKey>(
             self.keypair.as_ref().unwrap().public_key().clone(),
-            next_sequence, // Use the incremented sequence number
+            sequence_value, // Use the incremented sequence number
             transaction_fee,
         )
         .with_memo(Memo::new_text("Testnet XLM transfer")?)
+        // .add_operation(claim_operation)
         .add_operation(payment_op)
         .into_transaction()?;
 
@@ -421,7 +480,7 @@ impl PiNetwork {
                 .map_err(|e| PiNetworkError::StellarError(anyhow::anyhow!("{}", e)))?;
 
             // Access fee based on actual structure
-            Ok(fee_stats.fee_charged.mode)
+            Ok(fee_stats.fee_charged.max)
         } else {
             Err(PiNetworkError::Other("Server not initialized".to_string()))
         }

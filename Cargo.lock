@@ -1200,6 +1200,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bip39",
+ "hex",
  "hmac",
  "lazy_static",
  "regex",
@@ -1217,8 +1218,10 @@ dependencies = [
 name = "pie_main_bot"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bip39",
  "clap",
+ "hex",
  "hmac",
  "lazy_static",
  "pi_network",
