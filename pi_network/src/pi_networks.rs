@@ -297,7 +297,7 @@ impl PiNetwork {
         let stats: &str = &self.fetch_base_fee().await?;
         println!("Fee stats: {:?}", stats);
         // 2. Determine my fee
-        let target: u32 = 300;
+        let target: u32 = stats.parse()?;
         let per_op = target + 1; // outbid by 1 stroop
         let op_count = 1; // e.g., one payment op
         let transaction_fee = stellar_base::amount::Stroops::new((per_op * op_count) as i64);
