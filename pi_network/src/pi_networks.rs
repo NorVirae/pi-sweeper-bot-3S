@@ -223,6 +223,7 @@ impl PiNetwork {
         //     .map_err(|_| PiNetworkError::Other("Failed to parse sequence number".to_string()))?;
         // The Stellar network expects the next transaction to use sequence+1
         let next_sequence = self.sequence_value + 1;
+        self.sequence_value = next_sequence; // Update the sequence value for the next transaction
         println!("Using next sequence number: {}", next_sequence);
 
         // --- Build the payment operation and transaction ---
